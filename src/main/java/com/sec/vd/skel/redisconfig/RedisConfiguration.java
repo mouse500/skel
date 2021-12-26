@@ -19,41 +19,36 @@ import reactor.core.scheduler.Schedulers;
 @Slf4j
 @Component
 public class RedisConfiguration {
-    private GenericObjectPool<StatefulRedisConnection<String, byte[]>> poolr;
-    private GenericObjectPool<StatefulRedisConnection<String, byte[]>> poolw;
+    private StatefulRedisConnection<String, byte[]> connr;
+    private StatefulRedisConnection<String, byte[]> connr2;
+    private StatefulRedisConnection<String, byte[]> connw;
+    private StatefulRedisConnection<String, byte[]> connw2;
     public RedisConfiguration() {
-        GenericObjectPoolConfig genericObjectPoolConfig = new GenericObjectPoolConfig();        //poolsize default : Max=8
-
         RedisURI redisURIr = RedisURI.builder().withHost("localhost").withPort(6379).build();
         RedisClient redisClientr = RedisClient.create(redisURIr);
-        this.poolr = ConnectionPoolSupport.createGenericObjectPool(
-                () -> redisClientr.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ))
-                , genericObjectPoolConfig);
-
+        this.connr =redisClientr.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ));
+        RedisURI redisURIr2 = RedisURI.builder().withHost("localhost").withPort(6379).build();
+        RedisClient redisClientr2 = RedisClient.create(redisURIr2);
+        this.connr2 =redisClientr2.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ));
         RedisURI redisURIw = RedisURI.builder().withHost("localhost").withPort(6379).build();
         RedisClient redisClientw = RedisClient.create(redisURIw);
-        this.poolw = ConnectionPoolSupport.createGenericObjectPool(
-                () -> redisClientw.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ))
-                , genericObjectPoolConfig);
+        this.connw =redisClientw.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ));
+        RedisURI redisURIw2 = RedisURI.builder().withHost("localhost").withPort(6379).build();
+        RedisClient redisClientw2 = RedisClient.create(redisURIw2);
+        this.connw2 =redisClientw2.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ));
     }
     public Mono<byte[]> get(String key) {
-        try (StatefulRedisConnection<String, byte[]> connection = this.poolw.borrowObject()) {
-            return connection.reactive().get(key).publishOn(Schedulers.parallel());
-        }
-        catch(Exception e) {
-            log.error(e.getMessage());
-            return Mono.empty();
-        }
+        return this.connr.reactive().get(key).publishOn(Schedulers.parallel());
+    }
+    public Mono<byte[]> get2(String key) {
+        return this.connr2.reactive().get(key).publishOn(Schedulers.parallel());
     }
     public Mono<String> set(String key,byte[] value) {
-        try (StatefulRedisConnection<String, byte[]> connection = this.poolw.borrowObject()) {
-            return connection.reactive().set(key,value).publishOn(Schedulers.parallel());
-        }
-        catch(Exception e) {
-            log.error(e.getMessage());
-            return Mono.empty();
-        }
+        return this.connw.reactive().set(key,value).publishOn(Schedulers.parallel());
+    }
+    public Mono<String> set2(String key,byte[] value) {
+        return this.connw2.reactive().set(key,value).publishOn(Schedulers.parallel());
     }
 
-    // 30 thread , 3 rampup , 20초후 4900 tps
+    // 2 static connection of redis,    jmeter 30 thread , 3 rampup , 20초후 5600 tps , cpu 100
 }

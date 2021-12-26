@@ -23,10 +23,22 @@ public class SkelHandler {
     @Autowired
     private RedisConfiguration redisConfiguration;
 
+    private boolean bb = true;
     public Mono<ServerResponse> ping_redis(ServerRequest request)
     {
-        Mono<String> a = Mono.defer(() -> redisConfiguration.set(key,bigpayload.getBytes(StandardCharsets.UTF_8)));
-        Mono<byte[]> b = Mono.defer(() -> redisConfiguration.get(key));
+        Mono<String> a;
+        Mono<byte[]> b;
+        a = Mono.defer(() -> redisConfiguration.set(key,bigpayload.getBytes(StandardCharsets.UTF_8)));
+
+        if(bb) {
+            a = Mono.defer(() -> redisConfiguration.set(key,bigpayload.getBytes(StandardCharsets.UTF_8)));
+            b = Mono.defer(() -> redisConfiguration.get(key));
+        }
+        else {
+            a = Mono.defer(() -> redisConfiguration.set2(key,bigpayload.getBytes(StandardCharsets.UTF_8)));
+            b = Mono.defer(() -> redisConfiguration.get2(key));
+        }
+        bb=!bb;
         return a.then(b).flatMap(ret ->	ServerResponse.ok().contentType(MediaType.TEXT_PLAIN).bodyValue(ret));
     }
 
