@@ -29,30 +29,59 @@ public class RedisConfiguration {
         this.poolr = ConnectionPoolSupport.createGenericObjectPool(
                 () -> redisClientr.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ))
                 , genericObjectPoolConfig);
+        this.poolr.setBlockWhenExhausted(false);
 
         RedisURI redisURIw = RedisURI.builder().withHost("localhost").withPort(6379).build();
         RedisClient redisClientw = RedisClient.create(redisURIw);
         this.poolw = ConnectionPoolSupport.createGenericObjectPool(
                 () -> redisClientw.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ))
                 , genericObjectPoolConfig);
+        this.poolw.setBlockWhenExhausted(false);
     }
     public Mono<byte[]> get(String key) {
-        try (StatefulRedisConnection<String, byte[]> connection = this.poolw.borrowObject()) {
-            return connection.reactive().get(key).publishOn(Schedulers.parallel());
-        }
-        catch(Exception e) {
-            log.error(e.getMessage());
-            return Mono.empty();
-        }
+        return Mono.fromSupplier(() -> {
+            try { return this.poolr.borrowObject(); }
+            catch(Exception e) { return Mono.error(e); }
+        }).retry()
+        .flatMap(connection -> {
+            StatefulRedisConnection<String, byte[]> conn = (StatefulRedisConnection<String, byte[]>) connection;
+            return conn.reactive()
+                    .get(key)
+                    .publishOn(Schedulers.parallel())
+                    .doFinally(w -> {
+                        this.poolr.returnObject(conn);
+                    });
+        });
+
+//        try (StatefulRedisConnection<String, byte[]> connection = this.poolw.borrowObject()) {
+//            return connection.reactive().get(key).publishOn(Schedulers.parallel());
+//        }
+//        catch(Exception e) {
+//            log.error(e.getMessage());
+//            return Mono.empty();
+//        }
     }
     public Mono<String> set(String key,byte[] value) {
-        try (StatefulRedisConnection<String, byte[]> connection = this.poolw.borrowObject()) {
-            return connection.reactive().set(key,value).publishOn(Schedulers.parallel());
-        }
-        catch(Exception e) {
-            log.error(e.getMessage());
-            return Mono.empty();
-        }
+        return Mono.fromSupplier(() -> {
+            try { return this.poolw.borrowObject(); }
+            catch(Exception e) { return Mono.error(e); }
+        }).retry()
+                .flatMap(connection -> {
+                    StatefulRedisConnection<String, byte[]> conn = (StatefulRedisConnection<String, byte[]>) connection;
+                    return conn.reactive()
+                            .set(key,value)
+                            .publishOn(Schedulers.parallel())
+                            .doFinally(w -> {
+                                this.poolw.returnObject(conn);
+                            });
+                });
+//        try (StatefulRedisConnection<String, byte[]> connection = this.poolw.borrowObject()) {
+//            return connection.reactive().set(key,value).publishOn(Schedulers.parallel());
+//        }
+//        catch(Exception e) {
+//            log.error(e.getMessage());
+//            return Mono.empty();
+//        }
     }
 
     // 30 thread , 3 rampup , 20초후 4900 tps
