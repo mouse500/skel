@@ -8,80 +8,37 @@ import io.lettuce.core.codec.CompressionCodec;
 import io.lettuce.core.codec.CompressionCodec.CompressionType;
 import io.lettuce.core.codec.RedisCodec;
 import io.lettuce.core.codec.StringCodec;
-import io.lettuce.core.support.ConnectionPoolSupport;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.pool2.impl.GenericObjectPool;
-import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import reactor.netty.internal.shaded.reactor.pool.InstrumentedPool;
+import reactor.netty.internal.shaded.reactor.pool.PoolBuilder;
 
 @Slf4j
 @Component
 public class RedisConfiguration {
-    private GenericObjectPool<StatefulRedisConnection<String, byte[]>> poolr;
-    private GenericObjectPool<StatefulRedisConnection<String, byte[]>> poolw;
+    private InstrumentedPool<StatefulRedisConnection<String, byte[]>> pool;
     public RedisConfiguration() {
-        GenericObjectPoolConfig genericObjectPoolConfig = new GenericObjectPoolConfig();        //poolsize default : Max=8
-
-        RedisURI redisURIr = RedisURI.builder().withHost("localhost").withPort(6379).build();
-        RedisClient redisClientr = RedisClient.create(redisURIr);
-        this.poolr = ConnectionPoolSupport.createGenericObjectPool(
-                () -> redisClientr.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ))
-                , genericObjectPoolConfig);
-        this.poolr.setBlockWhenExhausted(false);
-
-        RedisURI redisURIw = RedisURI.builder().withHost("localhost").withPort(6379).build();
-        RedisClient redisClientw = RedisClient.create(redisURIw);
-        this.poolw = ConnectionPoolSupport.createGenericObjectPool(
-                () -> redisClientw.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ))
-                , genericObjectPoolConfig);
-        this.poolw.setBlockWhenExhausted(false);
+        this.pool = PoolBuilder.from( Mono.fromCallable(() -> {
+            RedisURI redisURI = RedisURI.builder().withHost("localhost").withPort(6379).build();
+            RedisClient redisClient = RedisClient.create(redisURI);
+            StatefulRedisConnection<String, byte[]> conn = redisClient.connect(CompressionCodec.valueCompressor(RedisCodec.of(StringCodec.UTF8, ByteArrayCodec.INSTANCE), CompressionType.DEFLATE ));
+            return conn;}))
+        .acquisitionScheduler(Schedulers.boundedElastic())
+        .destroyHandler(conn -> Mono.fromRunnable(conn::close))
+        .buildPool();
+        this.pool.warmup().block();
     }
     public Mono<byte[]> get(String key) {
-        return Mono.fromSupplier(() -> {
-            try { return this.poolr.borrowObject(); }
-            catch(Exception e) { return Mono.error(e); }
-        }).retry()
-        .flatMap(connection -> {
-            StatefulRedisConnection<String, byte[]> conn = (StatefulRedisConnection<String, byte[]>) connection;
-            return conn.reactive()
-                    .get(key)
-                    .publishOn(Schedulers.parallel())
-                    .doFinally(w -> {
-                        this.poolr.returnObject(conn);
-                    });
-        });
-
-//        try (StatefulRedisConnection<String, byte[]> connection = this.poolw.borrowObject()) {
-//            return connection.reactive().get(key).publishOn(Schedulers.parallel());
-//        }
-//        catch(Exception e) {
-//            log.error(e.getMessage());
-//            return Mono.empty();
-//        }
+        return this.pool.withPoolable(connection -> {
+            return connection.reactive().get(key).publishOn(Schedulers.parallel());
+        }).last();
     }
     public Mono<String> set(String key,byte[] value) {
-        return Mono.fromSupplier(() -> {
-            try { return this.poolw.borrowObject(); }
-            catch(Exception e) { return Mono.error(e); }
-        }).retry()
-                .flatMap(connection -> {
-                    StatefulRedisConnection<String, byte[]> conn = (StatefulRedisConnection<String, byte[]>) connection;
-                    return conn.reactive()
-                            .set(key,value)
-                            .publishOn(Schedulers.parallel())
-                            .doFinally(w -> {
-                                this.poolw.returnObject(conn);
-                            });
-                });
-//        try (StatefulRedisConnection<String, byte[]> connection = this.poolw.borrowObject()) {
-//            return connection.reactive().set(key,value).publishOn(Schedulers.parallel());
-//        }
-//        catch(Exception e) {
-//            log.error(e.getMessage());
-//            return Mono.empty();
-//        }
+        return this.pool.withPoolable(connection -> {
+            return connection.reactive().set(key,value).publishOn(Schedulers.parallel());
+        }).last();
     }
 
     // 30 thread , 3 rampup , 20초후 4900 tps
